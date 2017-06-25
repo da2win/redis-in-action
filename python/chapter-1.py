@@ -21,3 +21,29 @@ def article_vote(conn, user, article):
 	if conn.sadd('voted:' + article_id, user):
 		conn.zincrby('score:', article, VOTE_SCORE)
 		conn.hincrby(article, 'votes', 1)
+
+def post_article(conn, user, title, link):
+	# 生成一个新的文章ID
+	article_id = str(conn.incr('article:'))
+
+	voted = 'voted:' + article_id
+	# 将发布文章的用户添加到文章的已投票用户名单中
+	conn.sadd(voted, user)
+	# 将这个名单的过期时间设置为一周
+	conn.expire(voted, ONE_WEEK_IN_SECONDS)
+
+	now = time.time()
+	article = 'article:' + article_id
+	# 将文章信息存储到一个散列表中
+	conn.hmset(article, {
+		'title': title,
+		'link': link,
+		'poster': user,
+		'time': now,
+		'votes': 1,
+	})
+
+	# 将文章添加到根据发布时间排序的有序集合和根据评分排序的有序集合中
+	conn.zadd('score:', article, now + VOTE_SCORE)
+	conn.zadd('time:', artcile, now)
+	return article_id
