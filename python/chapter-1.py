@@ -47,3 +47,20 @@ def post_article(conn, user, title, link):
 	conn.zadd('score:', article, now + VOTE_SCORE)
 	conn.zadd('time:', artcile, now)
 	return article_id
+
+ARTICLES_PER_PAGE = 25
+
+def get_articles(conn, page, order='score:'):
+	# 设置获取文章的起始索引和结束索引
+	start = (page-1) * ARTICLES_PER_PAGE
+	end = start + ARTICLES_PER_PAGE - 1
+
+	#获取多个文章id
+	ids = conn.zrevrange(order, start, end) 
+	articles = []
+	for id in ids:
+		# 根据文章ID获取文章的详细信息
+		article_data = conn.hgetall(id)
+		article_data['id'] = id
+		articles.append(article_data)
+	return articles
