@@ -64,3 +64,27 @@ def get_articles(conn, page, order='score:'):
 		article_data['id'] = id
 		articles.append(article_data)
 	return articles
+
+def add_remove_groups(conn, article_id, to_add=[], to_remove=[]):
+	# 构建存储文章信息的键名
+	article = 'article:' + article_id
+	# 将文章减价到它所属的群组里面
+	for group in to_add:
+		conn.sadd('group:' + group, article)
+	for group in to_remove:
+	# 从群组里面移除文章
+		conn.srem('group:' + group, article)
+
+def get_group_articles(conn, group, page, order="score:"):
+	# 为每个群组的每种排列顺序都创建一个键
+	key = order + group
+	# 检查是否有已缓存的排序结果, 如果没有的话现在就进行排序
+	if not  conn.exists(key):
+		conn.zinterstore(key,
+			['group:' + group, order],
+			aggregate = 'max',
+		)
+		# 让Redis在60秒后自动删除这个有序集合
+		conn.expire(key, 60)
+	#调用之前定义的 get_articles()
+	return get_articles(conn, page, key)
