@@ -89,3 +89,36 @@ def cache_request(conn, request, callback):
 		conn.setex(page_key, content, 300)
 
 	return content #返回页面
+
+def schedule_row_cache(conn, row_id, delay):
+	# 先设置数据行的延迟值
+	conn.zadd('delay:', row_id, delay)
+	# 立即对需要缓存的数据行进行调度
+	conn.zadd('schedule:', row_id, time.time())
+
+def cache_rows(conn):
+	while not QUIT:
+		next = conn.zrange('schedule:', 0, 0, withscores=True)
+		now = time.time()
+
+		# 尝试获取下一个需要被缓存的数据行以及该行的调度时间戳,
+		# 命令会返回一个包含零个或一个元组(tuple)的列表
+		if not next or next[0][1]:
+			# 暂时没有行需要被缓存, 休息50毫秒后重试
+			time.sleep(.05)
+			continue
+
+		# 提前获取下一次调度的延迟时间
+		delay = conn.zscore('delay:', row_id)
+		if delay <= 0:
+			# 不必再缓存这个行, 将它从缓存中移除
+			conn.zrem('delay:', row_id)
+			conn.zrem('schedule:', row_id)
+			conn.delete('inv:' + row_id)
+			continue
+
+		# 读取数据行
+		row = Inventory.get(row_id)
+		conn.zadd('schedule:', row_id, now + delay)
+		# 更新调度时间并设置缓存值
+		conn.set('inv:' + row_id, json.dumps(row.to_dict()))
