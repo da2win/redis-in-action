@@ -110,6 +110,7 @@ class TestCh01(unittest.TestCase):
 
 		print("It's HASH looks like:")
 		r = conn.hgetall('article:' + article_id)
+		print('-' * 50)
 		print(r)
 		print()
 		self.assertTrue(r)
