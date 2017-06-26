@@ -44,3 +44,48 @@ def clean_sessions(conn):
 		# 移除最旧的键名
 		conn.hdel('login:', *tokens)
 		conn.zrem('recent:', *tokens)
+
+# 更新购物车
+def add_to_cart(conn, session, item, count):
+	if count <= 0:
+		# 从购物车里面移除指定的商品
+		conn.hrem('cart:' + session, item)
+	else:
+		# 将指定的商品添加购物车中
+		conn.hset('cart:' + session, item, count)
+
+def clean_full_sessions(conn):
+	while not QUIT:
+		size = conn.zcard('recent')
+		if size <= LIMIT:
+			time.sleep(1)
+			continue
+		end_index = min(size - LIMIT, 100)
+		sessions = conn.zrange('recent:', 0, end_index - 1)
+
+		session_keys = []
+		for sess in sessions:
+			session_keys.append('viewed:' + sess)
+			# 用于删除旧的会话对应用户的购物车
+			session_keys.append('cart:' + sess)
+		conn.delete(*session_keys)
+		conn.hdel('login:', *sessions)
+		conn.zrem('recent:', *sessions)
+
+def cache_request(conn, request, callback):
+	# 对于不能被缓存的请求, 直接调用回调函数
+	if not can_cache(conn, request, callback):
+		return callback(request)
+
+	#将请求转换成一个简单的字符串键,方便之后进行查找
+	page_key = 'cache:' + hash_request(request)
+	# 尝试查找被缓存的页面
+	content = conn.get(page_key)
+
+	if not content:
+		# 如果页面还没有被缓存, 那么生成页面
+		content = callback(request)
+		# 将新生成的页面放到缓存里面
+		conn.setex(page_key, content, 300)
+
+	return content #返回页面
