@@ -29,3 +29,6 @@ def log_recent(conn, name, message, serverity=logging.INFO, pipe=None):
 	pipe.ltrim(destination, 0, 99)
 	# 执行两个命令
 	pipe.execute()
+
+def log_common(conn, name, message, serverity=logging.INFO, timeout=5):
+	
