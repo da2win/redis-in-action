@@ -65,6 +65,49 @@ def purchase_item(conn, buyerid, itemid, sellerid, lprice):
 		except redis.exceptions.WatchError:
 			pass
 	return False
+
+def update_token(conn, token, user, item=None):
+	# 获取时间戳
+	timestamp = time.time()
+	# 创建令牌与已登录用户之间的映射
+	conn.hset('login:', token, user)
+	# 记录令牌最后一次出现的时间
+	conn.zadd('recent:', token, timestamp)
+
+	if item:
+		# 把浏览过的商品记录起来
+		conn.zadd('viewed:' + token, item, timestamp)
+		# 移除旧商品， 只保留最近浏览的25件商品
+		conn.zremrangebyrank('viewed:' + token, 0, -26)
+		# 更新给定商品的被浏览次数
+		conn.zincrby("viewed:", item, -1)
+
+def update_token_pipeline(conn, token, user, item=None):
+	timestamp = time.time()
+	# 设置流水线
+	pipe = conn.pipeline(False)
+	pipe.hset('login:', token, user)
+	pipe.zadd('recent:', token, timestamp)
+	if item:
+		pipe.zadd('viewed:' + token, item, timestamp)
+		pipe.zremrangebyrank('viewed:' + token, 0, -26)
+		pipe.zincrby('viewed:', item, -1)
+	# 执行那些被流水线包裹的命令
+	pipe.execute()
+
+def benchmark_update_token(conn, duration):
+	for function in (update_token, update_token_pipeline):
+		# 设置计数器以及测试结束的条件
+		count = 0
+		start = time.time()
+		end = start + duration
+		while time.time() < end:
+			count += 1
+			# 调用两个函数的其中一个
+			function(conn, 'token', 'user', 'item')
+		delta = time.time() - start
+		print(function.__name__, count, delta, count / delta)
+
 class TestCh04(unittest.TestCase):
 	def setUp(self):
 		import redis
@@ -128,6 +171,8 @@ class TestCh04(unittest.TestCase):
 		self.assertTrue('itemX', i)
 		self.assertEqual(conn.zscore('market:', 'itemX.userX'), None)
 
+	def test_benchmark_update_token(self):
+		benchmark_update_token(self.conn, 5)
 if __name__ == '__main__':
 	unittest.main()
 
