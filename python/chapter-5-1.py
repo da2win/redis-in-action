@@ -87,6 +87,79 @@ def log_common(conn, name, message, severity=logging.INFO, timeout=5):
 			# 如果程序因为其他客户端正在执行归档操作而出现监视错误， 那么进行重试
 			continue
 
+# 以秒为单位的计数器经度，分别为1秒、5秒、1分钟、5分钟、1小时、5小时、一天
+# 用户可以按需调整这些精度
+PRECISION = [1, 5, 60, 300, 3600, 18000, 86400]
+
+def update_counter(conn, name, count = 1, now = None):
+	# 通过取得当前时间来判断应该对哪个时间片执行自增操作
+	now = now or time.time()
+	# 为了保证之后的清理工作可以正确地执行，这里需要创建一个事务型流水线
+	pipe = conn.pipeline()
+	# 为我们记录的每一种精度都创建一个计数器
+	for prec in PRECISION:
+		# 取得当前时间片的开始时间
+		pnow = int(now / prec) * prec
+		# 创建负责存储技术信息的散列
+		hash = '%s:%s' % (prec, name)
+		# 将计数器的引用信息添加到有序集合里面，并将其分值
+		# 设置为0， 以便在之后执行清理操作
+		pipe.zadd('known:', hash, 0)
+		# 对给定名字和精度的计数器进行更新
+		pipe.hincrby('count:' + hash, pnow, count)
+
+def get_counter(conn, name, precision):
+	# 取得存储计数器数据的键的名字
+	hash = '%s:%s' % (precision, name)
+	# 从Redis里面取出计数器数据
+	data = conn.hgetall('count:' + hash)
+	to_return = []
+	# 将计数器数据转换成指定的格式
+	for key, value in data.iteritems():
+		to_return.append((int(key)), int(value))
+	# 对数据进行排序，把旧的数据样本排在前面
+	to_return.sort()
+	return to_return 
+
+def clean_counters(conn):
+	pipe = conn.pipeline(True)
+	# 为了平等地处理更新频率各不相同的多个计数器，
+	# 程序需要记录清理操作执行的次数。
+	passes = 0
+
+	# 持续地对计数器进行清理，直到退出为止。
+	while not QUIT:
+		# 记录清理操作开始执行的时间，这个值将被用于计算清理操作的执行时长。
+		start = time.time()
+		# 渐进地遍历所有已知的计数器。
+		index = 0
+		while index < conn.zcard('known:'):
+			# 取得被检查计数器的数据。
+			hash = conn.zrange('known:', index, index)
+			index += 1
+			if not hash:
+				break
+			hash = hash[0]
+			# 取得计数器的精度
+			prec = int(hash.partition(':')[0])
+
+			# 因为清理程序每60秒就会循环一次， 所以这里需要根据计数器的更新频率
+			# 来判断是否真的有必要对计数器进行清理。
+			bprec = int(prec // 60) or 1
+
+			# 如果这个计数器在这次循环里不需要进行清理，那么检查下一个计数器。（
+			# 举个例子，如果清理程序只循环了3次，而计数器的更新频率为每5分钟一次，
+			# 那么程序暂时还不需要对这个计数器进行清理。
+			if passes % bprec:
+				continue
+
+			hkey = 'count:' + hash
+			# 根据给定的精度以及需要保留的样本数量，计算出我们需要保留什么时间
+			# 之前的样本
+			cutoff = time.time() - SAMPLE_COUNT * prec
+			#  获取样本的开始时间，并将其从字符串转为整数
+			samples = map(int, conn.hkeys(hkey))
+
 
 
 class TestCh05(unittest.TestCase):
