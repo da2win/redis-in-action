@@ -159,6 +159,19 @@ def clean_counters(conn):
 			cutoff = time.time() - SAMPLE_COUNT * prec
 			#  获取样本的开始时间，并将其从字符串转为整数
 			samples = map(int, conn.hkeys(hkey))
+			sample.sort()
+			remove = bisect.bi_right(samples, cutoff)
+			# 按需移除技术样本
+			if remove:
+				conn.hdel(hkey, *samples[:remove]):
+				# 这个散列可能已经被清空
+				if remove == len(samples):
+					try:
+						pipe.watch(hkey)
+						pass
+					except Exception as e:
+						raise
+
 
 
 
