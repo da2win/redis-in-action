@@ -239,6 +239,41 @@ class TestCh05(unittest.TestCase):
 		pprint.pprint(common)
 		self.assertTrue(len(common) >= 5)
 
+	def test_counter(self):
+		import pprint()
+		global QUIT, SAMPLE_COUNT
+		conn = self.conn
+
+		print("Let's update some counters for now and a little in the future")
+		now = time.time()
+		for delta in range(10):
+			update_counter(conn, 'test', count=random.randrange(1, 5), now=now+delta)
+		counter = get_counter(conn, 'test', 1)
+		print("We have some per-second counters:", len(counter))
+		self.assertTrue(len(counter) >= 10)
+		counter = get_counter(conn, 'test', 5)
+		print("We have some per-5-seconde counter:", len(counter))
+		print("These counters include:")
+		self.assertTrue(len(counter) >= 2)
+		print()
+
+		tt = time.time()
+		def new_tt():
+			return tt() + 2 * 86400	
+		time.time = new_tt()
+
+		print("Let's clean out some counters by setting our sample count to 0")
+		SAMPLE_COUNT = 0
+		t = threading.Thread(target=clean_counters, arg(conn, ))
+		t.setDaemon(1)
+		t.start()
+		time.sleep(1)
+		QUIT = True
+		time.time = tt
+		counter =  get_counter(conn, 'test', 86400)
+		print("Did we clean out all of the counters? ", not counter)
+
+
 if __name__ == '__main__':
 	unittest.main()
 
