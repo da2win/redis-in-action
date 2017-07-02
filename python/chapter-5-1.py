@@ -167,11 +167,30 @@ def clean_counters(conn):
 				# 这个散列可能已经被清空
 				if remove == len(samples):
 					try:
+						# 在尝试修改计数器三列之前, 对其进行监视.
 						pipe.watch(hkey)
+						# 验证计数器散列是否为空, 如果是的话, 那么从记录
+						# 一直计数器的有序集合里面移除它. 计数器散列并不
+						# 为空, 继续让他留在记录一直计数器的有序集合里面
+						if not pipe.hlen(hkey):
+							pipe.multi()
+							pipe.zrem('known:', hash)
+							pipe.execute()
+							# 在删除一个计数器的情况下, 下次循环可以使用
+							# 与本次循环相同的索引
+							index -= 1
+						else:
+							pipe.unwatch()
+					except redis.exceptions.WatchError:
 						pass
-					except Exception as e:
-						raise
 
+		# 为了让清理操作的执行频率与计数器更新的频率保持一致, 
+		# 对记录循环次数的变量以及记录执行时长的变量进行更新
+		passes += 1
+		duration = min(int(time.time() - start) + 1, 60)
+		# 如果这次循环未耗尽60秒, 那么在余下的时间内进行休眠;
+		# 如果60秒已经耗尽,那么休眠一秒以便稍作休息
+		time.sleep(max(60 - duration, 1))
 
 
 
