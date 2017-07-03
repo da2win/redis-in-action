@@ -1,10 +1,18 @@
 
-import redis
+import bisect
+import contextlib
+import csv
+from datetime import datetime
+import functools
+import json
+import logging
+import random
+import threading
 import time
 import unittest
-from datetime import datetime
 import uuid
-import random
+
+import redis
 
 def update_stats(conn, context, type, value, timeout=5):
 	# 负责存储统计数据的键
@@ -65,6 +73,36 @@ def get_stats(conn, context, type):
 	data['stddev'] = (numerator / (data[b'count'] - 1 or 1)) ** .5
 	return data
 
+# 将这个Python生成器用作上下文管理器。
+@contextlib.contextmanager
+def access_time(conn, context):
+	# 记录代码块执行前的时间
+	start = time.time()
+	# 运行被包裹的代码块
+	yield
+	delta = time.time() - start
+	# 更新这一上下文的统计数据
+	stats = update_stats(conn, context, 'AccessTime', delta)
+	# 计算页面的平均访问时长
+	average = stats[1] / stats[0]
+
+	pipe = conn.pipeline(True)
+	# 将页面的平均访问时长添加到记录最长访问时间的有序集合里。
+	pipe.zadd('slowest:AccessTime', context, average)
+	# AccessTime 有序集合只会保留最慢的100条记录
+	pipe.zremrangebyrank('slowest:AccessTime', 0, -101)
+	pipe.execute()
+
+
+# 这个视图（view）接受一个Redis链接以及一个生成内容的回调函数作为参数
+def process_view(conn, callback):
+	# 计算并记录访问时长的上下文管理器就是这样包围代码块的。
+	with access_time(conn, request.path):
+		# 当上下文管理器中的yield语句被执行时，这个语句就会被执行
+		return callback
+
+class request:
+	pass
 
 class TestCh05(unittest.TestCase):
 
@@ -98,6 +136,32 @@ class TestCh05(unittest.TestCase):
 
 		self.assertTrue(rr[b'count'] >= 5)
 
+	def test_access_time(self):
+		import pprint
+		conn = self.conn
+
+		print("Let's calculate some access times...")
+		for i in range(10):
+			with access_time(conn, 'req-%s'%i):
+				time.sleep(.5 + random.random())
+		print("The slowest access times are:")
+		atimes = conn.zrevrange('slowest:AccessTime', 0, -1, withscores=True)
+		pprint.pprint(atimes[:10])
+		self.assertTrue(len(atimes) >= 10)
+		print()
+
+		def cb():
+			time.sleep(1 + random.random())
+
+		print("Let's use the callback version...")
+		for i in range(5):
+			request.path = 'cbreq-%s'%i
+			process_view(conn, cb)
+
+		print("The slowest access times are:")
+		atimes = conn.zrevrange('slowest:AccessTime', 0, -1, withscores = True)
+		pprint.pprint(atimes[:10])
+		self.assertTrue(len(atimes) >= 10)
 
 if __name__ == '__main__':
     unittest.main()
