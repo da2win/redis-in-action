@@ -12,6 +12,8 @@ import time
 import unittest
 import uuid
 
+import redis
+
 QUIT = False
 SAMPLE_COUNT = 100
 
@@ -107,6 +109,7 @@ def update_counter(conn, name, count = 1, now = None):
 		pipe.zadd('known:', hash, 0)
 		# 对给定名字和精度的计数器进行更新
 		pipe.hincrby('count:' + hash, pnow, count)
+	pipe.execute()
 
 def get_counter(conn, name, precision):
 	# 取得存储计数器数据的键的名字
@@ -115,8 +118,8 @@ def get_counter(conn, name, precision):
 	data = conn.hgetall('count:' + hash)
 	to_return = []
 	# 将计数器数据转换成指定的格式
-	for key, value in data.iteritems():
-		to_return.append((int(key)), int(value))
+	for key, value in data.items():
+		to_return.append((int(key), int(value)))
 	# 对数据进行排序，把旧的数据样本排在前面
 	to_return.sort()
 	return to_return 
@@ -130,7 +133,7 @@ def clean_counters(conn):
 	# 持续地对计数器进行清理，直到退出为止。
 	while not QUIT:
 		# 记录清理操作开始执行的时间，这个值将被用于计算清理操作的执行时长。
-		start = time.time()
+		start = time.time
 		# 渐进地遍历所有已知的计数器。
 		index = 0
 		while index < conn.zcard('known:'):
@@ -139,7 +142,8 @@ def clean_counters(conn):
 			index += 1
 			if not hash:
 				break
-			hash = hash[0]
+			hash = hash[0].decode('utf-8')
+			print(hash)
 			# 取得计数器的精度
 			prec = int(hash.partition(':')[0])
 
@@ -156,14 +160,14 @@ def clean_counters(conn):
 			hkey = 'count:' + hash
 			# 根据给定的精度以及需要保留的样本数量，计算出我们需要保留什么时间
 			# 之前的样本
-			cutoff = time.time() - SAMPLE_COUNT * prec
+			cutoff = time.time - SAMPLE_COUNT * prec
 			#  获取样本的开始时间，并将其从字符串转为整数
 			samples = map(int, conn.hkeys(hkey))
-			sample.sort()
-			remove = bisect.bi_right(samples, cutoff)
+			samples = sorted(samples)
+			remove = bisect.bisect_right(samples, cutoff)
 			# 按需移除技术样本
 			if remove:
-				conn.hdel(hkey, *samples[:remove]):
+				conn.hdel(hkey, *samples[:remove])
 				# 这个散列可能已经被清空
 				if remove == len(samples):
 					try:
@@ -187,7 +191,7 @@ def clean_counters(conn):
 		# 为了让清理操作的执行频率与计数器更新的频率保持一致, 
 		# 对记录循环次数的变量以及记录执行时长的变量进行更新
 		passes += 1
-		duration = min(int(time.time() - start) + 1, 60)
+		duration = min(int(time.time - start) + 1, 60)
 		# 如果这次循环未耗尽60秒, 那么在余下的时间内进行休眠;
 		# 如果60秒已经耗尽,那么休眠一秒以便稍作休息
 		time.sleep(max(60 - duration, 1))
@@ -239,8 +243,8 @@ class TestCh05(unittest.TestCase):
 		pprint.pprint(common)
 		self.assertTrue(len(common) >= 5)
 
-	def test_counter(self):
-		import pprint()
+	def test_counters(self):
+		import pprint
 		global QUIT, SAMPLE_COUNT
 		conn = self.conn
 
@@ -257,14 +261,15 @@ class TestCh05(unittest.TestCase):
 		self.assertTrue(len(counter) >= 2)
 		print()
 
-		tt = time.time()
+		tt = time.time
+
 		def new_tt():
 			return tt() + 2 * 86400	
 		time.time = new_tt()
 
 		print("Let's clean out some counters by setting our sample count to 0")
 		SAMPLE_COUNT = 0
-		t = threading.Thread(target=clean_counters, arg(conn, ))
+		t = threading.Thread(target=clean_counters, args=(conn, ))
 		t.setDaemon(1)
 		t.start()
 		time.sleep(1)
