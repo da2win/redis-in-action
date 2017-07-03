@@ -45,7 +45,7 @@ def import_cities_to_redis(conn, filename):
 	for row in csv.reader(open(filename, 'r')):
 		if len(row) < 4 or not row[0].isdigit():
 			continue
-		row = [i.decode('latin-1') for i in row]
+		row = [i for i in row]
 		# 准备好需要添加到散列里面的信息
 		city_id = row[0]
 		country = row[1]
