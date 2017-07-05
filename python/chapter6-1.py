@@ -55,10 +55,11 @@ def autocomplete_on_prefix(conn, guild, prefix):
 	identifier = str(uuid.uuid4())
 	start += identifier
 	end += identifier
-	zset_name = 'memebers:' + guild
+	zset_name = 'members:' + guild
 
 	# 将范围的起始元素和结束元素添加到有序集合里面。
-	conn.zadd(zset_name, start, 0, end, 0)
+	conn.zadd(zset_name, start, 0)
+	conn.zadd(zset_name, end, 0)
 	pipeline = conn.pipeline(True)
 	while 1:
 		try:
@@ -73,12 +74,13 @@ def autocomplete_on_prefix(conn, guild, prefix):
 			pipeline.zrem(zset_name, start, end)
 			pipeline.zrange(zset_name, sindex, erange)
 			items = pipeline.execute()[-1]
+			break
 		except redis.exceptions.WatchError:
 			# 如果自动补全有序集合已经被其他客户端修改过了，那么重试。
 			continue
 	# 如果有其他自动补全操作正在执行， 那么从获取到的元素里
 	# 面移除起始元素和结束元素
-	return [item for item in items if '{' not in item]
+	return [item for item in items if b'{' not in item]
 
 def join_guild(conn, guild, user):
 	conn.zadd('members:' + guild, user, 0)
@@ -92,7 +94,7 @@ class TestCh06(unittest.TestCase):
 		self.conn = redis.Redis(db=15)
 
 	def tearDown(self):
-		self.conn.flushdb()
+		# self.conn.flushdb()
 		del self.conn
 		print()
 		print()
@@ -135,8 +137,29 @@ class TestCh06(unittest.TestCase):
 		contacts = fetch_autocomplete_list(conn, 'user', 'contact-2-')
 		equiv.sort()
 		contacts.sort()
+		pprint.pprint(contacts)
 		self.assertEquals(equiv, contacts)
 		conn.delete('recent:user')
+
+	def test_address_book_autocomplete(self):
+		self.conn.delete('members:test')
+		print("the start/end range of 'abc' is:", find_prefix_range('abc'))
+		print()
+
+		print("Let's add a few people to the guild")
+		for name in ['jeff', 'jenny', 'jack', 'jennifer']:
+			join_guild(self.conn, 'test', name)
+		print()
+		print("now let's try to find users with names starting with 'je':")
+		r = autocomplete_on_prefix(self.conn, 'test', 'je')
+		print(r)
+		self.assertTrue(len(r) == 3)
+		print("jeff just left to join a different guild...")
+		leave_guild(self.conn, 'test', 'jeff')
+		r = autocomplete_on_prefix(self.conn, 'test', 'je')
+		print(r)
+		self.assertTrue(len(r) == 2)
+		self.conn.delete('members:test')
 
 if __name__ == '__main__':
 	unittest.main()
