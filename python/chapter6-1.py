@@ -1,13 +1,21 @@
-import redis
 import bisect
+from collections import defaultdict, deque
+import json
+import math
+import os
+import time
+import unittest
 import uuid
+import zlib
+
+import redis
 
 def add_update_contact(conn, user, contact):
 	ac_list = 'recent:' + user
 	# 准备执行原子操作
 	pipeline = conn.pipeline(True)
 	# 如果联系人已经存在， 那么移除它
-	pipeline.lrem(ac_list, conatct)
+	pipeline.lrem(ac_list, contact)
 	# 将联系人推入列表的最前端
 	pipeline.lpush(ac_list, contact)
 	# 只保留列表里面的前100个联系人
@@ -24,7 +32,7 @@ def fetch_autocomplete_list(conn, user, prefix):
 	matchs = []
 	# 检查每个候选联系人
 	for candidate in candidates:
-		if candidate.lower().startswith(prefix):
+		if candidate.lower().startswith(prefix.encode('utf-8')):
 			# 发现一个匹配的联系人
 			matchs.append(candidate)
 	# 返回所有匹配的联系人
@@ -71,3 +79,64 @@ def autocomplete_on_prefix(conn, guild, prefix):
 	# 如果有其他自动补全操作正在执行， 那么从获取到的元素里
 	# 面移除起始元素和结束元素
 	return [item for item in items if '{' not in item]
+
+def join_guild(conn, guild, user):
+	conn.zadd('members:' + guild, user, 0)
+
+def leave_guild(conn, guild, user):
+	conn.zrem('members:' + guild, user)
+
+class TestCh06(unittest.TestCase):
+	def setUp(self):
+		import redis
+		self.conn = redis.Redis(db=15)
+
+	def tearDown(self):
+		self.conn.flushdb()
+		del self.conn
+		print()
+		print()
+
+	def test_add_update_contact(self):
+		import pprint
+		conn = self.conn
+		conn.delete('recent:user')
+
+		print("Let's add a few contacts...")
+		for i in range(10):
+			add_update_contact(conn, 'user', 'contact-%i-%i'%(i//3, i))
+		print("Current recently contacted contacts")
+		contacts = conn.lrange('recent:user', 0, -1)
+		pprint.pprint(contacts)
+		self.assertTrue(len(contacts) >= 10)
+		print()
+
+		print("Let's pull one of the older ones up to the front")
+		add_update_contact(conn, 'user', 'contact-1-4')
+		contacts = conn.lrange('recent:user', 0, 2)
+		print("New top-3 contacts:")
+		pprint.pprint(contacts)
+		self.assertEquals(contacts[0], b'contact-1-4')
+		print()
+
+		print("Let's remove a contact...")
+		print(remove_contact(conn, 'user', 'contact-2-6'))
+		contacts = conn.lrange('recent:user', 0, -1)
+		print("New contacts:")
+		pprint.pprint(contacts)
+		self.assertTrue(len(contacts) >= 9)
+		print()
+
+		print("And let's finally autocomplete on ")
+		all = conn.lrange('recent:user', 0, -1)
+		contacts = fetch_autocomplete_list(conn, 'user', 'c')
+		self.assertTrue(all == contacts)
+		equiv = [c for c in all if c.startswith(b'contact-2-')]
+		contacts = fetch_autocomplete_list(conn, 'user', 'contact-2-')
+		equiv.sort()
+		contacts.sort()
+		self.assertEquals(equiv, contacts)
+		conn.delete('recent:user')
+
+if __name__ == '__main__':
+	unittest.main()
