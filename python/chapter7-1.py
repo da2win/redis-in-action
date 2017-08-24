@@ -70,7 +70,7 @@ def difference(conn, items, ttl=30, _execute=True):
 	return _set_common(conn, 'sdiffstore', items, ttl, _execute)
 	
 # 用于查找需要的单词, 不需要的单词以及同义词的正则表达式
-QUERY_RE = re.compile("[+-]?[a-z]{2,}")
+QUERY_RE = re.compile("[+-]?[a-z']{2,}")
 
 def parse(query):
 	# 这个集合存储不需要的单词
@@ -80,12 +80,12 @@ def parse(query):
 	# 这个集合将用于存储目前已发现的同义词
 	current = set()
 	# 遍历搜索查询语句是中的所有单词.
-	for match in QUERY.finditer(query.lower()):
+	for match in QUERY_RE.finditer(query.lower()):
 		# 检查单词是否带有加号前缀或者减号前缀, 如果有的话
 		word = match.group()
 		prefix = word[:1]
 		if prefix in '+-':
-			word = word[:1]
+			word = word[1:]
 		else:
 			prefix = None
 
@@ -113,139 +113,140 @@ def parse(query):
 	#  把所有剩余的单词都放到最后的交集计算里面进行处理
 	return all, list(unwanted)
 
-	def parse_and_search(conn, query, ttl = 30):
-		# 对查询语句进行语法分析
-		all, unwanted = parse(query)
-		# 如果查询语句只包含非用词,那么这次搜索将没有任何结果
-		if not all:
-			return None
+def parse_and_search(conn, query, ttl = 30):
+	# 对查询语句进行语法分析
+	all, unwanted = parse(query)
+	# 如果查询语句只包含非用词,那么这次搜索将没有任何结果
+	if not all:
+		return None
 
-		to_intersect = []
-		# 遍历各个同义词列表
-		for syn in all:
-			# 如果同义词列表内包含的单词不止一个, 那儿执行并集运算
-			if len(syn) > 1:
-			 	to_intersect.append(union(conn, syn, ttl=ttl))
-			else:
-			 	to_intersect.append(syn[0])
-
-		# 如果单词(或者并集计算的结果) 不止一个, 那么执行并集计算
-		if len(to_intersect) > 1:
-	 		intersect_result = intersect(conn, to_intersect, ttl=ttl)
+	to_intersect = []
+	# 遍历各个同义词列表
+	for syn in all:
+		# 如果同义词列表内包含的单词不止一个, 那儿执行并集运算
+		if len(syn) > 1:
+		 	to_intersect.append(union(conn, syn, ttl=ttl))
 		else:
-	 		intersect_result = to_interest[0]
+		 	to_intersect.append(syn[0])
 
-	 	# 如果用户给定了不需要的单词, 
-	 	# 那么从交集计算结果里面移除包含这些单词的文档
-		if unwanted:
- 			unwanted.insert(0, intersect_result)
- 			return difference(conn, unwanted, ttl=ttl)
+	# 如果单词(或者并集计算的结果) 不止一个, 那么执行并集计算
+	if len(to_intersect) > 1:
+ 		intersect_result = intersect(conn, to_intersect, ttl=ttl)
+	else:
+ 		intersect_result = to_intersect[0]
 
- 		# 如果用户没有给定不需要的单词, 
- 		# 那么直接返回交集运算的结果作为搜索的结果
-		return intersect_reuslt
+ 	# 如果用户给定了不需要的单词, 
+ 	# 那么从交集计算结果里面移除包含这些单词的文档
+	if unwanted:
+		unwanted.insert(0, intersect_result)
+		return difference(conn, unwanted, ttl=ttl)
 
-		# 用户可以通过可选的参数来传入已有的搜索结果, 指定搜索结果的排序方式,
-		# 并对结果进行分页
-		def search_and_sort(conn, query, id=None, ttl=300, sort="-updated",start=0, num=20):
+	# 如果用户没有给定不需要的单词, 
+	# 那么直接返回交集运算的结果作为搜索的结果
+	return intersect_result
 
-			# 决定基于文档的那个属性进行排序, 以及时升序排列还是降序排列
-			desc = sort.startswith('-')
-			sort = sort.lstrip('-')
-			by = "kb:doc:*->" + sort
-			# 告知redis, 排序是以数值方式进行还是字母方式进行. 
-			alpha = sort not in ('updated', 'id', 'created')
-			# 如果用户给定了已有的搜索结果, 
-			# 并且这个结果仍然存在,那么延长它的生存时间
-			if id and not conn.expire(id, ttl):
-				id = None
-			# 如果用户没有给定已有的搜索结果, 或者给定的搜索结果已经过期,那么执行一次新的搜索操作. 
-			if not id:
-				id = parse_and_search(conn, query, ttl=ttl)
+# 用户可以通过可选的参数来传入已有的搜索结果, 指定搜索结果的排序方式,
+# 并对结果进行分页
+def search_and_sort(conn, query, id=None, ttl=300, sort="-updated",start=0, num=20):
 
-			pipeline = conn.pipeline(True)
-			# 获取结果集合的元素数量. 
-			pipeline.scard('idx:' + id)
-			# 根据指定属性对结果进行排序,并且只获取用户指定那一部分结果
-			pipeline.sort('idx:' + id, by=by, alpha=alpha, desc=desc, num=num)
-			results = pipeline.execute()
+	# 决定基于文档的那个属性进行排序, 以及时升序排列还是降序排列
+	desc = sort.startswith('-')
+	sort = sort.lstrip('-')
+	by = "kb:doc:*->" + sort
+	# 告知redis, 排序是以数值方式进行还是字母方式进行. 
+	alpha = sort not in ('updated', 'id', 'created')
+	# 如果用户给定了已有的搜索结果, 
+	# 并且这个结果仍然存在,那么延长它的生存时间
+	if id and not conn.expire(id, ttl):
+		id = None
+	# 如果用户没有给定已有的搜索结果, 或者给定的搜索结果已经过期,那么执行一次新的搜索操作. 
+	if not id:
+		id = parse_and_search(conn, query, ttl=ttl)
 
-			# 返回搜索结果包含的元素数量, 搜索结果本身以及搜索结果的ID,其中搜索
-			# 结果的ID可以用于之后再次获取本次搜索的结果
-			return results[0], results[1], id
+	pipeline = conn.pipeline(True)
+	# 获取结果集合的元素数量. 
+	pipeline.scard('idx:' + id)
+	# 根据指定属性对结果进行排序,并且只获取用户指定那一部分结果
+	pipeline.sort('idx:' + id, by=by, alpha=alpha, desc=desc, start=start, num=num)
+	results = pipeline.execute()
+
+	# 返回搜索结果包含的元素数量, 搜索结果本身以及搜索结果的ID,其中搜索
+	# 结果的ID可以用于之后再次获取本次搜索的结果
+	return results[0], results[1], id
 
 
-		def search_and_zsort(conn, query, id=None, ttl=300, update=1, vote=0, start=0, num=20, desc=True):
-			# 尝试刷新已有的搜索结果的生存时间
-			if id and not conn.expire(id, ttl):
-				id = None
+def search_and_zsort(conn, query, id=None, ttl=300, update=1, vote=0, start=0, num=20, desc=True):
+	# 尝试刷新已有的搜索结果的生存时间
+	if id and not conn.expire(id, ttl):
+		id = None
 
-			if not id:
-				# 如果传入的结果已经过期, 或者这是函数第一次进行搜索,
-				# 那么执行标准的集合搜索操作.
-				id = parse_and_search(conn, query, ttl=ttl)
+	if not id:
+		# 如果传入的结果已经过期, 或者这是函数第一次进行搜索,
+		# 那么执行标准的集合搜索操作.
+		id = parse_and_search(conn, query, ttl=ttl)
 
-				# 函数在计算交集的时候也会用到传入的ID键, 
-				# 但这个键不会用作排序权重(weight)
-				scored_search = {
-					id: 0,
-					'sort:update': update,
-					'sort:votes': vote
-				}
-				id = zintersect(conn, scored_search, ttl)
+		# 函数在计算交集的时候也会用到传入的ID键, 
+		# 但这个键不会用作排序权重(weight)
+		scored_search = {
+			id: 0,
+			'sort:update': update,
+			'sort:votes': vote
+		}
+		id = zintersect(conn, scored_search, ttl)
 
-			pipeline = conn.pipeline(True)
-			# 获取结果有序集合的大小
-			pipeline.zcard('idx:' + id)
-			# 从搜索结果里面取出一页
-			if desc:
-				pipeline.zrevrange('idx:' + id, start, start + num - 1)
-			else:
-				pipeline.zrange('idex:' + id, start, start + num - 1)
+	pipeline = conn.pipeline(True)
+	# 获取结果有序集合的大小
+	pipeline.zcard('idx:' + id)
+	# 从搜索结果里面取出一页
+	print("idx:" + id)
+	if desc:
+		pipeline.zrevrange('idx:' + id, start, start + num - 1)
+	else:
+		pipeline.zrange('idx:' + id, start, start + num - 1)
 
-			results = pipeline.execute()
+	results = pipeline.execute()
 
-			# 返回搜索结果, 已经分页用的ID值
-			return results[0], results[1], id
+	# 返回搜索结果, 已经分页用的ID值
+	return results[0], results[1], id
 
-		def _zset_common(conn, method, scores, ttl=30, **kw):
-			id = str(uuid.uuid4())
-			# 调用者可以通过传递参数来界定是否使用事务流水线
-			execute = kw.pop('_execute', True)
-			pipeline = conn.pipeline(True) if execute else conn
-			
-			for key in socres.keys():
-				scores['idx:' + key] = scores.pop(key)
-			# 为将要执行的操作设置好相应的参数. 
-			getattr(pipeline, mehtod) ('idx:' + id, scores, **kw)
-			# 为计算结果有序集合设置过期时间
-			pipeline.expire('idex:' + id, ttl)
-			# 如果调用者没有显示指示要延迟执行这个操作, 那么实际地执行这个操作
-			if execute:
-				pipeline.execute()
-			return id
+def _zset_common(conn, method, scores, ttl=30, **kw):
+	id = str(uuid.uuid4())
+	# 调用者可以通过传递参数来界定是否使用事务流水线
+	execute = kw.pop('_execute', True)
+	pipeline = conn.pipeline(True) if execute else conn
+	
+	for key in scores.keys():
+		scores['idx:' + key] = scores.pop(key)
+	# 为将要执行的操作设置好相应的参数. 
+	getattr(pipeline, method) ('idx:' + id, scores, **kw)
+	# 为计算结果有序集合设置过期时间
+	pipeline.expire('idex:' + id, ttl)
+	# 如果调用者没有显示指示要延迟执行这个操作, 那么实际地执行这个操作
+	if execute:
+		pipeline.execute()
+	return id
 
-		def zintersect(conn, items, ttl=30, **kw):
-			return _zset_common(conn, 'zinterstore', dict(items), ttl, **kw)
+def zintersect(conn, items, ttl=30, **kw):
+	return _zset_common(conn, 'zinterstore', dict(items), ttl, **kw)
 
-		def zunion(conn, items, ttl=30, **kw):
-			return _zset_common(conn, 'zunionstore', dict(items), ttl, **kw)
+def zunion(conn, items, ttl=30, **kw):
+	return _zset_common(conn, 'zunionstore', dict(items), ttl, **kw)
 
-		def string_to_score(string, ignore_case=False):
-			# 用户可以通过参数来决定是否以大小写无关的方式建立前缀索引
-			if ignore_case:
-				string = string.lower()
-			# 将字符串的前6个字符转换为相应的数字值,比如空字节转换为0,
-			#  制表符(tab)转换为9,大写A转换为65,诸如此类
-			pieces = list(map(ord, stirng[:6]))
-			while len(pieces) < 6:
-				pieces.append(-1)
+def string_to_score(string, ignore_case=False):
+	# 用户可以通过参数来决定是否以大小写无关的方式建立前缀索引
+	if ignore_case:
+		string = string.lower()
+	# 将字符串的前6个字符转换为相应的数字值,比如空字节转换为0,
+	#  制表符(tab)转换为9,大写A转换为65,诸如此类
+	pieces = list(map(ord, string[:6]))
+	while len(pieces) < 6:
+		pieces.append(-1)
 
-			score = 0
-			for piece in pieces:
-				score = score * 257 + piece + 1
+	score = 0
+	for piece in pieces:
+		score = score * 257 + piece + 1
 
-			return score * 2 + (len(string) > 6)
+	return score * 2 + (len(string) > 6)
 
 
 class TestCh07(unittest.TestCase):
@@ -287,6 +288,91 @@ class TestCh07(unittest.TestCase):
         r = difference(self.conn, ['content', 'indexed'])
         self.assertEquals(self.conn.smembers('idx:' + r), set())
 
+    def test_parse_query(self):
+        query = 'test query without stopwords'
+        self.assertEquals(parse(query), ([[x] for x in query.split()], []))
+
+        query = 'test +query without -stopwords'
+        self.assertEqual(parse(query), ([['test', 'query'], ['without']], ['stopwords']))
+
+    def test_parse_and_search(self):
+        print("And now we are testing search...")
+        index_document(self.conn, 'test', self.content)
+
+        r = parse_and_search(self.conn, 'content')
+        self.assertEquals(self.conn.smembers('idx:' + r), set([b'test']))
+
+        r = parse_and_search(self.conn, 'content indexed random')
+        self.assertEquals(self.conn.smembers('idx:' + r), set([b'test']))
+
+        r = parse_and_search(self.conn, 'content +indexed random')
+        self.assertEquals(self.conn.smembers('idx:' + r), set([b'test']))
+
+        r = parse_and_search(self.conn, 'content indexed +random')
+        self.assertEquals(self.conn.smembers('idx:' + r), set([b'test']))
+
+        r = parse_and_search(self.conn, 'content indexed -random')
+        self.assertEquals(self.conn.smembers('idx:' + r), set())
+
+        r = parse_and_search(self.conn, 'content indexed +random')
+        self.assertEquals(self.conn.smembers('idx:' + r), set([b'test']))
+
+        print("Which passed!")
+
+    def test_search_with_sort(self):
+        print("And now let's test searching with sorting...")
+
+        index_document(self.conn, 'test', self.content)
+        index_document(self.conn, 'test2', self.content)
+        self.conn.hmset('kb:doc:test', {'updated': 12345, 'id': 10})
+        self.conn.hmset('kb:doc:test2', {'updated': 54321, 'id': 1})
+
+        r = search_and_sort(self.conn, "content")
+        self.assertEquals(r[1], [b'test2', b'test'])
+
+        r = search_and_sort(self.conn, "content", sort='-id')
+        self.assertEquals(r[1], [b'test', b'test2'])
+        print("Which passed!")
+
+    def test_search_with_zsort(self):
+        print("And now let's test searching with sorting via zset...")
+
+        index_document(self.conn, 'test', self.content)
+        index_document(self.conn, 'test2', self.content)
+        self.conn.zadd('idx:sort:update', 'test', 12345, 'test2', 54321)
+        self.conn.zadd('idx:sort:votes', 'test', 10, 'test2', 1)
+
+        r = search_and_zsort(self.conn, "content", desc=False)
+        self.assertEqual(r[1], [b'test', b'test2'])
+
+        r = search_and_zsort(self.conn, "content", update=0, vote=1, desc=False)
+        self.assertEquals(r[1], [b'test2', b'test'])
+        print("Which passed!")
+
+    def test_string_to_score(self):
+        words = 'these are some words that will be sorted'.split()
+        pairs = [(word, string_to_score(word)) for word in words]
+        pairs2 = list(pairs)
+        pairs.sort()
+        pairs2.sort(key=lambda x:x[1])
+        self.assertEquals(pairs, pairs2)
+
+        words = 'these are some words that will be sorted'.split()
+        pairs = [(word, string_to_score_generic(word, LOWER)) for word in words]
+        pairs2 = list(pairs)
+        pairs.sort()
+        pairs2.sort(key=lambda x:x[1])
+        self.assertEquals(pairs, pairs2)
+
+        zadd_string(self.conn, 'key', 'test', 'value', test2='other')
+        self.assertTrue(self.conn.zscore('key', 'test'), string_to_score('value'))
+        self.assertTrue(self.conn.zscore('key', 'test2'), string_to_score('other'))
+
+
 if __name__ == '__main__':
     unittest.main()
+  #   print(parse('''
+		# connect +connection +disconnect +disconnection
+		# chat
+		# -proxy -proxies'''))
 
