@@ -310,8 +310,8 @@ class TestCh07(unittest.TestCase):
     def setUp(self):
         self.conn = redis.Redis(db=15, password='payexpress.redis')
         self.conn.flushdb()
-    # def tearDown(self):
-    #     self.conn.flushdb()
+    def tearDown(self):
+        self.conn.flushdb()
 
     def test_index_and_target_ads(self):
         index_ad(self.conn, '1', ['USA', 'CA'], self.content, 'cpc', .25)
